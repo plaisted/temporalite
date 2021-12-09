@@ -10,6 +10,7 @@ import (
 	"os"
 
 	"github.com/urfave/cli/v2"
+	"go.temporal.io/api/enums/v1"
 	"go.temporal.io/server/common/headers"
 	"go.temporal.io/server/common/log"
 	"go.temporal.io/server/temporal"
@@ -105,11 +106,8 @@ func buildCLI() *cli.App {
 				if c.IsSet(ephemeralFlag) && c.IsSet(dbPathFlag) {
 					return cli.Exit(fmt.Sprintf("ERROR: only one of %q or %q flags may be passed at a time", ephemeralFlag, dbPathFlag), 1)
 				}
-				if (c.IsSet(searchAttrType) || c.IsSet(searchAttrKey)) && !(c.IsSet(searchAttrType) && c.IsSet(searchAttrKey)) {
-					return cli.Exit(fmt.Sprintf("ERROR: both %q and %q must be set at the same time, or omitted completely", searchAttrType, searchAttrKey), 1)
-				}
-				if c.IsSet(searchAttrType) && c.IsSet(searchAttrKey) && len(c.StringSlice(searchAttrType)) == len(c.StringSlice(searchAttrKey)) {
-					return cli.Exit(fmt.Sprintf("ERROR: number of search attributes (type/key) in %q and %q must be the same", searchAttrType, searchAttrKey), 1)
+				if err := searchAttributesValid(c); err != nil {
+					return err
 				}
 				switch c.String(logFormatFlag) {
 				case "json", "pretty":
@@ -129,6 +127,13 @@ func buildCLI() *cli.App {
 				}
 				if c.Bool(ephemeralFlag) {
 					opts = append(opts, temporalite.WithPersistenceDisabled())
+				}
+				if c.IsSet(searchAttrType) && c.IsSet(searchAttrKey) {
+					sa, err := parseSearchAttributes(c.StringSlice(searchAttrKey), c.StringSlice(searchAttrType))
+					if err != nil {
+						return err
+					}
+					opts = append(opts, temporalite.WithSearchAttributes(sa))
 				}
 				if c.String(logFormatFlag) == "pretty" {
 					lcfg := zap.NewDevelopmentConfig()
@@ -158,4 +163,26 @@ func buildCLI() *cli.App {
 	}
 
 	return app
+}
+
+func parseSearchAttributes(keys []string, types []string) (map[string]enums.IndexedValueType, error) {
+	var searchAttributes = make(map[string]enums.IndexedValueType, len(keys))
+	for i, key := range keys {
+		t, ok := enums.IndexedValueType_value[types[i]]
+		if !ok {
+			return nil, fmt.Errorf("the type: %s is not a valid type for a search attribute", types[i])
+		}
+		searchAttributes[key] = enums.IndexedValueType(t)
+	}
+	return searchAttributes, nil
+}
+
+func searchAttributesValid(c *cli.Context) error {
+	if (c.IsSet(searchAttrType) || c.IsSet(searchAttrKey)) && !(c.IsSet(searchAttrType) && c.IsSet(searchAttrKey)) {
+		return cli.Exit(fmt.Sprintf("ERROR: both %q and %q must be set at the same time, or omitted completely", searchAttrType, searchAttrKey), 1)
+	}
+	if c.IsSet(searchAttrType) && c.IsSet(searchAttrKey) && len(c.StringSlice(searchAttrType)) != len(c.StringSlice(searchAttrKey)) {
+		return cli.Exit(fmt.Sprintf("ERROR: number of search attributes (type/key) in %q and %q must be the same", searchAttrType, searchAttrKey), 1)
+	}
+	return nil
 }
